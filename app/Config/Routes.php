@@ -35,3 +35,11 @@ $routes->get('keranjang', 'TransaksiController::index', ['filter' => 'auth']);
 
 // Profile
 $routes->get('profile', 'ProfileController::index', ['filter' => 'auth']);
+
+// Checkout
+$routes->get('checkout', 'TransaksiController::checkout', ['filter' => 'auth']);
+$routes->post('buy', 'TransaksiController::buy', ['filter' => 'auth']);
+
+// ajax
+$routes->get('ajax/destinations','TransaksiController::destinations', ['filter' => 'auth']);
+$routes->get('ajax/costs','TransaksiController::costs', ['filter' => 'auth']);
