@@ -16,7 +16,7 @@ protected $transactionDetailModel;
 
     public function __construct()
     {
-        helper(['number', 'form']);
+        helper(['number', 'form', 'checkout']);
         $this->cart = service('cart');
         $this->transactionModel = new TransactionModel();
 $this->transactionDetailModel = new TransactionDetailModel(); 
@@ -97,13 +97,51 @@ public function cart_clear()
 }
 
 public function checkout()
-{  
+{
+    $items = $this->cart->contents();
+    $total = $this->cart->total(); // subtotal produk (sebelum ongkir)
+
     $data = [
-        'items' => $this->cart->contents(),
-        'total' => $this->cart->total(),
+        'items'          => $items,
+        'total'          => $total,
+        'biaya_jasa'     => hitung_biaya_jasa($total),
+        'diskon_voucher' => 0,
+        'free_mouse'     => hitung_free_mouse($total),
+        'voucher_list'   => get_voucher_list(),
     ];
 
     return view('v_checkout', $data);
+}
+
+/**
+ * AJAX: hitung ulang biaya jasa, diskon voucher, free mouse
+ * setiap kali kode voucher / ongkir berubah di halaman checkout.
+ */
+public function hitung()
+{
+    $totalHarga  = (float) $this->request->getGet('total_harga');
+    $voucherCode = (string) $this->request->getGet('voucher_code');
+    $ongkir      = (float) $this->request->getGet('ongkir');
+
+    $biayaJasa     = hitung_biaya_jasa($totalHarga);
+    $diskonVoucher = hitung_diskon_voucher($totalHarga, $voucherCode);
+    $freeMouse     = hitung_free_mouse($totalHarga);
+
+    $subtotalAkhir = $totalHarga + $biayaJasa - $diskonVoucher - $freeMouse;
+    $grandTotal    = $subtotalAkhir + $ongkir;
+
+    $code = strtoupper(trim($voucherCode));
+    $voucherValid = ($code === '') || isset(get_voucher_list()[$code]);
+
+    return $this->response->setJSON([
+        'total_harga'    => $totalHarga,
+        'biaya_jasa'     => $biayaJasa,
+        'diskon_voucher' => $diskonVoucher,
+        'free_mouse'     => $freeMouse,
+        'subtotal_akhir' => $subtotalAkhir,
+        'grand_total'    => $grandTotal,
+        'voucher_valid'  => $voucherValid,
+    ]);
 }
 public function destinations()
 {
@@ -165,14 +203,27 @@ public function buy()
         $subtotal += $item['qty'] * $item['price'];
     }
 
-    $ongkir = (int) $this->request->getPost('ongkir');
+    $ongkir      = (int) $this->request->getPost('ongkir');
+    $voucherCode = trim((string) $this->request->getPost('voucher_code'));
+
+    // Perhitungan biaya jasa, diskon voucher, dan free mouse
+    // selalu dihitung ulang di server berdasarkan subtotal produk asli dari cart.
+    $biayaJasa     = hitung_biaya_jasa($subtotal);
+    $diskonVoucher = hitung_diskon_voucher($subtotal, $voucherCode);
+    $freeMouse     = hitung_free_mouse($subtotal);
+
+    $grandTotal = $subtotal + $biayaJasa - $diskonVoucher - $freeMouse + $ongkir;
 
     $transaction = [
-        'username'    => $this->request->getPost('username'),
-        'alamat'      => $this->request->getPost('alamat'),
-        'ongkir'      => $ongkir,
-        'total_harga' => $subtotal + $ongkir,
-        'status'      => 0, 
+        'username'       => $this->request->getPost('username'),
+        'alamat'         => $this->request->getPost('alamat'),
+        'ongkir'         => $ongkir,
+        'total_harga'    => $grandTotal,
+        'status'         => 0,
+        'biaya_jasa'     => $biayaJasa,
+        'voucher_code'   => $voucherCode !== '' ? strtoupper($voucherCode) : null,
+        'diskon_voucher' => $diskonVoucher,
+        'free_mouse'     => $freeMouse,
     ];
 
     // insert transaction
@@ -203,5 +254,23 @@ public function buy()
 		//hapus session keranjang belanja 
     $this->cart->destroy();
     return redirect()->to(base_url());
+}
+
+public function history()
+{
+    $username = session()->get('username'); 
+ 
+    $transactions = $this->transactionModel->where('username', $username)->findAll();
+    $transactionIds = array_column($transactions, 'id');
+
+    $products = $this->transactionDetailModel->getProductsByTransactionIds($transactionIds);
+
+    $data = [
+        'username'      => $username,
+        'transactions'  => $transactions,
+        'products'      => $products
+    ]; 
+
+    return view('v_history', $data);
 }
 }

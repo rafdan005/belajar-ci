@@ -45,6 +45,25 @@
         'readonly' => true]) ?>
 </div>
 <div class="col-12">
+    <?= form_label('Kode Voucher', 'voucher_code', ['class' => 'form-label']) ?>
+    <?= form_input([
+        'name'        => 'voucher_code',
+        'id'          => 'voucher_code',
+        'class'       => 'form-control',
+        'placeholder' => 'Contoh: PROMO2026']) ?>
+    <small class="text-muted">
+        Tersedia:
+        <?php
+        $labels = [];
+        foreach ($voucher_list as $code => $rate) {
+            $labels[] = $code . ' (' . ($rate * 100) . '%)';
+        }
+        echo implode(', ', $labels);
+        ?>
+    </small>
+    <div id="voucher_feedback" class="small mt-1"></div>
+</div>
+<div class="col-12">
     <?= form_submit(
         'submit',
         'Buat Pesanan',
@@ -85,8 +104,28 @@
       </tr>
       <tr>
           <td colspan="2"></td>
-          <td>Total</td>
-          <td><span id="total"><?= number_to_currency($total, 'IDR') ?></span></td>
+          <td class="text-danger">Diskon Voucher</td>
+          <td class="text-danger"><span id="diskon_voucher">-<?= number_to_currency(0, 'IDR') ?></span> <span id="diskon_persen" class="text-muted"></span></td>
+      </tr>
+      <tr>
+          <td colspan="2"></td>
+          <td>Biaya Jasa</td>
+          <td><span id="biaya_jasa"><?= number_to_currency($biaya_jasa, 'IDR') ?></span></td>
+      </tr>
+      <tr>
+          <td colspan="2"></td>
+          <td class="text-success">Free Mouse</td>
+          <td class="text-success"><span id="free_mouse"><?= $free_mouse > 0 ? '-' . number_to_currency($free_mouse, 'IDR') : number_to_currency(0, 'IDR') ?></span></td>
+      </tr>
+      <tr>
+          <td colspan="2"></td>
+          <td><strong>Subtotal (+Jasa-Voucher-FreeMouse)</strong></td>
+          <td><strong><span id="subtotal_akhir"><?= number_to_currency($total + $biaya_jasa - $free_mouse, 'IDR') ?></span></strong></td>
+      </tr>
+      <tr>
+          <td colspan="2"></td>
+          <td><strong>Grand Total (incl. Ongkir)</strong></td>
+          <td><strong><span id="total"><?= number_to_currency($total + $biaya_jasa - $free_mouse, 'IDR') ?></span></strong></td>
       </tr>
   </tbody>
 </table>
@@ -96,19 +135,53 @@
 <script>
 $(document).ready(function() {
     let ongkir = 0;
-let subtotal = <?= $total ?>;
-hitungTotal();
+    let subtotal = <?= $total ?>;
+    let hitungTimer = null;
 
-function hitungTotal() {
-    let total = subtotal + ongkir;
+    hitungTotal();
 
-    $("#ongkir").val(ongkir);
-    $("#total").text(`IDR ${total.toLocaleString('id-ID')}`);
-    $("#total_harga").val(total);
-}
-	$('#kelurahan').select2({
-	    placeholder: 'Cari daerah tujuan',
-	    minimumInputLength: 3,
+    function formatIDR(angka) {
+        return 'IDR ' + Math.round(angka).toLocaleString('id-ID');
+    }
+
+    function hitungTotal() {
+        $("#ongkir").val(ongkir);
+
+        $.ajax({
+            url: "<?= site_url('ajax/hitung') ?>",
+            dataType: "json",
+            data: {
+                total_harga: subtotal,
+                voucher_code: $('#voucher_code').val(),
+                ongkir: ongkir
+            },
+            success: function (data) {
+                $("#biaya_jasa").text(formatIDR(data.biaya_jasa));
+                $("#diskon_voucher").text('-' + formatIDR(data.diskon_voucher));
+                $("#free_mouse").text(data.free_mouse > 0 ? '-' + formatIDR(data.free_mouse) : formatIDR(0));
+                $("#subtotal_akhir").text(formatIDR(data.subtotal_akhir));
+                $("#total").text(formatIDR(data.grand_total));
+                $("#total_harga").val(data.grand_total);
+
+                let kode = $('#voucher_code').val().trim();
+                if (kode === '') {
+                    $('#diskon_persen').text('');
+                    $('#voucher_feedback').html('');
+                } else if (data.voucher_valid) {
+                    let persen = subtotal > 0 ? Math.round((data.diskon_voucher / subtotal) * 100) : 0;
+                    $('#diskon_persen').text('(' + persen + '%)');
+                    $('#voucher_feedback').html('<span class="text-success">Voucher berhasil diterapkan</span>');
+                } else {
+                    $('#diskon_persen').text('');
+                    $('#voucher_feedback').html('<span class="text-danger">Kode voucher tidak valid</span>');
+                }
+            }
+        });
+    }
+
+    $('#kelurahan').select2({
+        placeholder: 'Cari daerah tujuan',
+        minimumInputLength: 3,
         ajax: {
             url: '<?= site_url('ajax/destinations') ?>',
             dataType: 'json',
@@ -123,36 +196,41 @@ function hitungTotal() {
             },
             cache: true
         } 
-	});
+    });
     $("#kelurahan").on('change', function () {
-    let id_kelurahan = $(this).val();
+        let id_kelurahan = $(this).val();
 
-    $("#layanan").empty();
-    ongkir = 0;
-    hitungTotal(); 
+        $("#layanan").empty();
+        ongkir = 0;
+        hitungTotal(); 
 
-    $.ajax({
-    url: "<?= site_url('ajax/costs') ?>", 
-    dataType: "json",
-    data: {
-        destination: id_kelurahan
-    },
-    success: function (data) { 
-        data.forEach(function (item) {
-            $("#layanan").append(
-                $('<option>', {
-                    value: item.cost,
-                    text: `${item.description} (${item.service}) : estimasi ${item.etd}`
-                })
-            );
+        $.ajax({
+            url: "<?= site_url('ajax/costs') ?>", 
+            dataType: "json",
+            data: {
+                destination: id_kelurahan
+            },
+            success: function (data) { 
+                data.forEach(function (item) {
+                    $("#layanan").append(
+                        $('<option>', {
+                            value: item.cost,
+                            text: `${item.description} (${item.service}) : estimasi ${item.etd}`
+                        })
+                    );
+                });
+            }
         });
-    }
-});
-});
-$("#layanan").on('change', function() {
-    ongkir = parseInt($(this).val());
-    hitungTotal();
-}); 
+    });
+    $("#layanan").on('change', function() {
+        ongkir = parseInt($(this).val());
+        hitungTotal();
+    });
+
+    $('#voucher_code').on('input', function() {
+        clearTimeout(hitungTimer);
+        hitungTimer = setTimeout(hitungTotal, 400);
+    });
 });
 </script>
 <?= $this->endSection() ?>
